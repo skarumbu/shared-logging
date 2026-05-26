@@ -4,6 +4,12 @@
   "type": "module",
   "main": "dist/logger.js",
   "types": "dist/logger.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/logger.js",
+      "types": "./dist/logger.d.ts"
+    }
+  },
   "scripts": {
     "build": "tsc",
     "test": "vitest run"
@@ -14,7 +20,6 @@
   "devDependencies": {
     "typescript": "^5.0.0",
     "vitest": "^2.0.0",
-    "@types/node": "^22.0.0",
-    "@types/pino": "^7.0.0"
+    "@types/node": "^22.0.0"
   }
 }
