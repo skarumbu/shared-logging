@@ -1,79 +1,73 @@
 import json
 import logging
+import functools
+import time
 from datetime import datetime, timezone
 
 
-def _build_json(record: logging.LogRecord, message_override=None) -> str:
-    """Build the structured JSON string from a LogRecord."""
-    entry: dict = {
-        "event": getattr(record, "event", "log"),
-        "service": record.name,
-        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") +
-                     f"{datetime.now(timezone.utc).microsecond // 1000:03d}Z",
-    }
-    for field in ("endpoint", "method", "status", "duration_ms",
-                  "error_type", "stack_trace"):
-        val = getattr(record, field, None)
-        if val is not None:
-            entry[field] = val
-    # message: prefer explicit extra field, fall back to non-empty log message
-    if message_override is not None:
-        entry["message"] = message_override
-    else:
-        msg = record.getMessage()
-        if msg:
-            entry["message"] = msg
-    return json.dumps(entry)
-
-
 class _JSONFormatter(logging.Formatter):
-    """Formatter that emits structured JSON. Used when handler has no formatter."""
+    """Formats log records as structured JSON matching the shared-logging schema."""
+
+    _SCHEMA_FIELDS = ("endpoint", "method", "status", "duration_ms",
+                      "error_type", "stack_trace")
 
     def format(self, record: logging.LogRecord) -> str:
-        message_override = getattr(record, "_message_override", None)
-        return _build_json(record, message_override)
+        now = datetime.now(timezone.utc)
+        timestamp = now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z"
+
+        entry: dict = {
+            "event": getattr(record, "event", "log"),
+            "service": record.name,
+            "timestamp": timestamp,
+        }
+
+        for field in self._SCHEMA_FIELDS:
+            val = getattr(record, field, None)
+            if val is not None:
+                entry[field] = val
+
+        # Handle 'message' extra field stored as _message_extra to avoid LogRecord conflict
+        message_extra = getattr(record, "_message_extra", None)
+        if message_extra is not None:
+            entry["message"] = message_extra
+        else:
+            # Include the log message string only when non-empty
+            msg = record.getMessage()
+            if msg:
+                entry["message"] = msg
+
+        return json.dumps(entry, default=str)
 
 
 class _Logger(logging.Logger):
-    """Logger subclass that:
-    - Allows 'message' in extra kwargs without raising KeyError.
-    - Pre-bakes JSON into record.msg so any handler (even unformatted) outputs JSON.
-    """
+    """Logger that safely handles 'message' in extra without raising KeyError."""
 
     def makeRecord(self, name, level, fn, lno, msg, args, exc_info,
                    func=None, extra=None, sinfo=None):
-        # Pull 'message' out of extra before the parent's makeRecord rejects it.
-        message_override = None
+        # Python's logging raises KeyError if 'message' is in extra (reserved attribute).
+        # Extract it and re-attach under a safe name for the formatter to consume.
+        message_extra = None
         if extra and "message" in extra:
             extra = dict(extra)
-            message_override = extra.pop("message")
+            message_extra = extra.pop("message")
 
         record = super().makeRecord(name, level, fn, lno, msg, args, exc_info,
                                     func=func, extra=extra, sinfo=sinfo)
-
-        # Store override for formatter use
-        if message_override is not None:
-            record._message_override = message_override
-
-        # Pre-bake the JSON into record.msg so any plain StreamHandler outputs it.
-        # Clear args so getMessage() returns the JSON string as-is.
-        record.msg = _build_json(record, message_override)
-        record.args = ()
-
+        if message_extra is not None:
+            record._message_extra = message_extra
         return record
 
 
 def get_logger(service_name: str) -> logging.Logger:
-    # Ensure the logger is an instance of _Logger so makeRecord override applies.
-    original_class = logging.getLoggerClass()
-    logging.setLoggerClass(_Logger)
-    logger = logging.getLogger(service_name)
-    logging.setLoggerClass(original_class)
+    """Return a structured JSON logger for the given service name.
 
-    # Upgrade an already-existing plain Logger instance to _Logger in-place
+    Idempotent: calling multiple times with the same name returns the same logger
+    without adding duplicate handlers.
+    """
+    logger = logging.getLogger(service_name)
+    # Upgrade to _Logger if needed so 'message' in extra is handled safely
     if not isinstance(logger, _Logger):
         logger.__class__ = _Logger
-
     if not logger.handlers:
         handler = logging.StreamHandler()
         handler.setFormatter(_JSONFormatter())
