@@ -12,5 +12,8 @@
   },
   "scripts": {
     "prepare": "cd node && npm install && npm run build"
+  },
+  "dependencies": {
+    "pino": "^9.0.0"
   }
 }
