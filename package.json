@@ -1,0 +1,16 @@
+{
+  "name": "@sriram/logger",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "node/dist/logger.js",
+  "types": "node/dist/logger.d.ts",
+  "exports": {
+    ".": {
+      "import": "./node/dist/logger.js",
+      "types": "./node/dist/logger.d.ts"
+    }
+  },
+  "scripts": {
+    "prepare": "cd node && npm install && npm run build"
+  }
+}
