@@ -153,3 +153,56 @@ def test_log_request_logs_exception_and_reraises():
     assert "boom" in data["message"]
     assert "stack_trace" in data
     assert data["status"] == 500
+
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from shared_logging import fastapi_middleware
+
+
+def test_fastapi_middleware_logs_request():
+    import uuid
+    app = FastAPI()
+    svc_name = f"fastapi-{uuid.uuid4().hex[:6]}"
+    fastapi_middleware(app, service_name=svc_name)
+
+    @app.get("/items")
+    def items():
+        return {"items": []}
+
+    client = TestClient(app)
+    # Capture by redirecting the logger's handler stream
+    logger = get_logger(svc_name)
+    buf = io.StringIO()
+    logger.handlers[0].stream = buf
+
+    client.get("/items")
+    lines = [l for l in buf.getvalue().strip().split("\n") if l]
+    assert len(lines) >= 1
+    data = json.loads(lines[-1])
+    assert data["event"] == "request"
+    assert data["service"] == svc_name
+    assert data["endpoint"] == "/items"
+    assert data["status"] == 200
+
+
+def test_fastapi_middleware_logs_error_for_5xx():
+    import uuid
+    app = FastAPI()
+    svc_name = f"fastapi-err-{uuid.uuid4().hex[:6]}"
+    fastapi_middleware(app, service_name=svc_name)
+
+    @app.get("/boom")
+    def boom():
+        raise ValueError("broke")
+
+    client = TestClient(app, raise_server_exceptions=False)
+    logger = get_logger(svc_name)
+    buf = io.StringIO()
+    logger.handlers[0].stream = buf
+
+    client.get("/boom")
+    lines = [l for l in buf.getvalue().strip().split("\n") if l]
+    data = json.loads(lines[-1])
+    assert data["event"] == "error"
+    assert data["error_type"] == "ValueError"

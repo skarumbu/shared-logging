@@ -118,3 +118,48 @@ def log_request(logger: logging.Logger):
                 raise
         return wrapper
     return decorator
+
+
+def fastapi_middleware(app, service_name: str) -> None:
+    """Register structured logging middleware on a FastAPI/Starlette app.
+
+    Call once at app startup, before routes are defined:
+        fastapi_middleware(app, service_name="my-service")
+    """
+    import traceback as _tb
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.requests import Request as StarletteRequest
+
+    logger = get_logger(service_name)
+
+    class _LoggingMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: StarletteRequest, call_next):
+            start = time.monotonic()
+            endpoint = str(request.url.path)
+            method = request.method
+            try:
+                response = await call_next(request)
+                duration_ms = round((time.monotonic() - start) * 1000, 1)
+                logger.info("", extra={
+                    "event": "error" if response.status_code >= 400 else "request",
+                    "endpoint": endpoint,
+                    "method": method,
+                    "status": response.status_code,
+                    "duration_ms": duration_ms,
+                })
+                return response
+            except Exception as exc:
+                duration_ms = round((time.monotonic() - start) * 1000, 1)
+                logger.error("", extra={
+                    "event": "error",
+                    "endpoint": endpoint,
+                    "method": method,
+                    "status": 500,
+                    "message": str(exc),
+                    "error_type": type(exc).__name__,
+                    "stack_trace": _tb.format_exc()[:2000],
+                    "duration_ms": duration_ms,
+                })
+                raise
+
+    app.add_middleware(_LoggingMiddleware)
