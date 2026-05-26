@@ -83,3 +83,73 @@ def test_non_serializable_extra_does_not_crash():
     ))
     # Should not raise; error_type should be stringified
     assert "error_type" in data
+
+
+import azure.functions as func
+from shared_logging import log_request
+
+
+def _make_request(method="GET", url="http://localhost/api/health"):
+    return func.HttpRequest(
+        method=method,
+        url=url,
+        headers={},
+        params={},
+        route_params={},
+        body=b"",
+    )
+
+
+def test_log_request_logs_200_as_request_event():
+    name = f"func-ok-{__import__('uuid').uuid4().hex[:6]}"
+    logger = get_logger(name)
+    buf = io.StringIO()
+    logger.handlers[0].stream = buf
+
+    @log_request(logger)
+    def handler(req):
+        return func.HttpResponse("ok", status_code=200)
+
+    handler(_make_request())
+    data = json.loads(buf.getvalue().strip())
+    assert data["event"] == "request"
+    assert data["status"] == 200
+    assert data["method"] == "GET"
+    assert "duration_ms" in data
+
+
+def test_log_request_logs_4xx_as_error_event():
+    name = f"func-4xx-{__import__('uuid').uuid4().hex[:6]}"
+    logger = get_logger(name)
+    buf = io.StringIO()
+    logger.handlers[0].stream = buf
+
+    @log_request(logger)
+    def handler(req):
+        return func.HttpResponse("not found", status_code=404)
+
+    handler(_make_request())
+    data = json.loads(buf.getvalue().strip())
+    assert data["event"] == "error"
+    assert data["status"] == 404
+
+
+def test_log_request_logs_exception_and_reraises():
+    name = f"func-exc-{__import__('uuid').uuid4().hex[:6]}"
+    logger = get_logger(name)
+    buf = io.StringIO()
+    logger.handlers[0].stream = buf
+
+    @log_request(logger)
+    def handler(req):
+        raise ValueError("boom")
+
+    with pytest.raises(ValueError):
+        handler(_make_request())
+
+    data = json.loads(buf.getvalue().strip())
+    assert data["event"] == "error"
+    assert data["error_type"] == "ValueError"
+    assert "boom" in data["message"]
+    assert "stack_trace" in data
+    assert data["status"] == 500

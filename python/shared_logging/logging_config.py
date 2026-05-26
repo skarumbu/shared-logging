@@ -75,3 +75,46 @@ def get_logger(service_name: str) -> logging.Logger:
         logger.setLevel(logging.INFO)
         logger.propagate = False
     return logger
+
+
+def log_request(logger: logging.Logger):
+    """Decorator for Azure Functions HTTP triggers. Logs every request and re-raises exceptions."""
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(req, *args, **kwargs):
+            start = time.monotonic()
+            # Extract endpoint from URL path after /api
+            try:
+                path = str(req.url).split("?")[0]
+                endpoint = "/" + path.split("/api", 1)[-1].lstrip("/") if "/api" in path else path
+            except Exception:
+                endpoint = "unknown"
+            method = getattr(req, "method", "UNKNOWN")
+            try:
+                response = func(req, *args, **kwargs)
+                status = getattr(response, "status_code", 200)
+                duration_ms = round((time.monotonic() - start) * 1000, 1)
+                logger.info("", extra={
+                    "event": "error" if status >= 400 else "request",
+                    "endpoint": endpoint,
+                    "method": method,
+                    "status": status,
+                    "duration_ms": duration_ms,
+                })
+                return response
+            except Exception as exc:
+                import traceback as _tb
+                duration_ms = round((time.monotonic() - start) * 1000, 1)
+                logger.error("", extra={
+                    "event": "error",
+                    "endpoint": endpoint,
+                    "method": method,
+                    "status": 500,
+                    "message": str(exc),
+                    "error_type": type(exc).__name__,
+                    "stack_trace": _tb.format_exc()[:2000],
+                    "duration_ms": duration_ms,
+                })
+                raise
+        return wrapper
+    return decorator
